@@ -1,2 +1,0 @@
-# Stacknord
-Webhosting website

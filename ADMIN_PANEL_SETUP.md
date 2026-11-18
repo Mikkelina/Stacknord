@@ -1,34 +1,33 @@
 # StackNord Admin Foundation
 
-This change adds an admin panel module and a one-time bootstrap command. It does not replace the existing storefront or payment flows.
+This branch contains an admin foundation for the existing Express + SQLite app. It adds staff login/roles, user management, support tickets and guarded payment review for manual payment methods.
 
-## Integration status
+## Status and limitations
 
-The admin module must be mounted by the application after session and CSRF middleware and before the final 404 handler. **The current change has not yet been integrated into `server.js`, so `/admin` is not active until that integration is made and tested. Do not deploy this as a completed admin panel.** Existing `/login`, registration, and order routes also need a follow-up change to reject banned accounts; this is not yet enforced across the storefront.
+The feature is not production-ready until installed and tested on a staging copy. `server.js` remains unchanged until the operator explicitly runs the integration script. That script modifies the local working copy, creates a timestamped backup, and fails if source anchors differ.
 
-When integrated, the server should import `installAdminPanel` and call `installAdminPanel(app, db, { csrf, page })` after those helpers are defined. Do not mount it before sessions and CSRF middleware.
+Implemented in code:
+- Staff-only login with session regeneration, an eight-hour admin session limit, and basic per-IP throttling.
+- Built-in admin/moderator/support roles and custom limited roles.
+- User listing/creation, ban/unban, staff role assignment, and protection against banning/demoting the last active admin.
+- Order listing and manual review for PayPal, crypto, and Vipps. Stripe payment status is only changed by the signed webhook; refunds are not exposed.
+- Customer support tickets, customer-owned ticket views, staff replies/statuses, and audit entries.
+- Audit log views and account-status enforcement for existing signed-in sessions.
 
-## Bootstrap the first administrator
+Not included: Stripe invoicing/PDF/email, product/plan editing, staff MFA, automated retention/deletion, password recovery, email notifications for support replies, and a full security audit. These need explicit implementation/review; don't treat this as complete business software or deploy without tests and staged verification.
 
-1. Create your own account through the normal registration page.
-2. Back up `data/stacknord.sqlite` first.
-3. Set `ADMIN_EMAIL` to that account's email in the server environment (or private `.env`), then run once from the project directory:
+## Integrate locally
+
+1. Back up the project and SQLite database. Stop the app before copying SQLite data so WAL contents are handled safely.
+2. From the project root, run:
+   ```bash
+   node scripts/integrate-admin.js
+   ```
+3. Run `node --check server.js`, then install dependencies and start a staging instance.
+4. Create an account on staging and promote it as administrator (use the actual database path if `DATABASE_PATH` is configured):
    ```bash
    ADMIN_EMAIL=you@example.com node scripts/promote-admin.js
    ```
-   In PowerShell, set `$env:ADMIN_EMAIL='you@example.com'` and then run `node scripts/promote-admin.js`.
-4. Remove `ADMIN_EMAIL` after bootstrapping. The command only promotes an existing account; it does not create a default password or expose one.
-5. Sign in at `/admin/login` using that account's existing credentials. Use a unique strong password and enable MFA at the hosting/control-panel level until application MFA is implemented.
+5. Sign in at `/admin/login`. Verify customer access at `/support`, staff responses at `/admin/support`, bans, roles, CSRF, checkout and webhooks before production.
 
-Do not commit `.env`, passwords, session secrets, Stripe keys, database files, or backups. Restrict filesystem permissions on the SQLite database and its `-wal`/`-shm` files.
-
-## Module capabilities (once integrated)
-
-- Separate `/admin/login` gate, session ID regeneration, an eight-hour admin session limit, and basic per-IP login throttling.
-- Built-in `admin`, `moderator`, and `support` roles with server-side permissions.
-- Admin overview, user/order lists, user creation, permanent ban/unban, staff role assignment, custom limited roles, and an admin audit log.
-- Custom roles cannot receive `roles.manage`; only the built-in admin role can manage roles.
-- The last active administrator cannot be banned or demoted through the panel, and staff cannot ban themselves or other staff unless they have role-management authority.
-- IP addresses are stored for admin login/logout and admin actions and visible only to `activity.read`. Establish and implement an appropriate retention period and privacy notice before production use.
-
-This remains a foundation rather than a production security review. Storefront ban enforcement, MFA, full audit event coverage, explicit CSRF/XSS/security tests, log retention automation, product/facturation tools, and deployment validation remain to be implemented. SQLite is the application's file-based database; no aaPanel database credentials are required for this stage.
+Use HTTPS, a unique strong password, least privilege, backups, and appropriate log/IP retention and privacy notices. MFA is not implemented in the application yet.

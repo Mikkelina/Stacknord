@@ -1,33 +1,40 @@
 'use strict';
 
-// Apply the admin integration as a one-time, idempotent patch. A backup is
-// created before writing; unexpected source layouts fail closed without edits.
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
-const serverPath = path.join(__dirname, '..', 'server.js');
+const root = path.join(__dirname, '..');
+const serverPath = path.join(root, 'server.js');
 let source = fs.readFileSync(serverPath, 'utf8');
 const original = source;
-
-const importLine = "const { installAdminPanel } = require('./admin-panel');";
-if (!source.includes(importLine)) {
-  const importAnchor = "const helmet = require('helmet');";
-  if (!source.includes(importAnchor)) throw new Error('Could not find server.js import anchor; no changes made.');
-  source = source.replace(importAnchor, `${importAnchor}\n${importLine}`);
+const imports = [
+  "const { installAdminPanel } = require('./admin-panel');",
+  "const { installAdminExtras } = require('./admin-extras');"
+];
+const importAnchor = "const helmet = require('helmet');";
+if (!source.includes(importAnchor) && imports.some((line) => !source.includes(line))) {
+  throw new Error('Could not find expected import anchor; no changes made.');
 }
+if (!source.includes(imports[0])) source = source.replace(importAnchor, `${importAnchor}\n${imports[0]}`);
+if (!source.includes(imports[1])) source = source.replace(imports[0], `${imports[0]}\n${imports[1]}`);
 
-const mountLine = 'installAdminPanel(app, db, { csrf, page });';
-if (!source.includes(mountLine)) {
-  const routeAnchor = "app.get('/', (req, res) =>";
-  if (!source.includes(routeAnchor)) throw new Error('Could not find route anchor; no changes made.');
-  source = source.replace(routeAnchor, `${mountLine}\n\n${routeAnchor}`);
+const installLines = [
+  'installAdminPanel(app, db, { csrf, page });',
+  'installAdminExtras(app, db, { csrf, page });'
+];
+const routeAnchor = "app.get('/', (req, res) =>";
+if (!source.includes(routeAnchor) && installLines.some((line) => !source.includes(line))) {
+  throw new Error('Could not find expected route anchor; no changes made.');
 }
+if (!source.includes(installLines[0])) source = source.replace(routeAnchor, `${installLines[0]}\n${installLines[1]}\n\n${routeAnchor}`);
+else if (!source.includes(installLines[1])) source = source.replace(installLines[0], `${installLines[0]}\n${installLines[1]}`);
 
-const enforcementMarker = '// ADMIN_ACCOUNT_STATUS_ENFORCEMENT';
-if (!source.includes(enforcementMarker)) {
-  const staticAnchor = "app.use(express.static(path.join(__dirname, 'public')));";
-  if (!source.includes(staticAnchor)) throw new Error('Could not find middleware anchor; no changes made.');
-  const enforcement = `${enforcementMarker}
+const marker = '// ADMIN_ACCOUNT_STATUS_ENFORCEMENT';
+const staticAnchor = "app.use(express.static(path.join(__dirname, 'public')));";
+if (!source.includes(marker)) {
+  if (!source.includes(staticAnchor)) throw new Error('Could not find expected middleware anchor; no changes made.');
+  const guard = `${marker}
 app.use((req, res, next) => {
   const userId = req.session?.user?.id;
   if (!userId) return next();
@@ -41,40 +48,28 @@ app.use((req, res, next) => {
   next();
 });
 `;
-  source = source.replace(staticAnchor, `${enforcement}\n${staticAnchor}`);
+  source = source.replace(staticAnchor, `${guard}\n${staticAnchor}`);
 }
-
 if (source === original) {
   console.log('Admin integration already present; no changes needed.');
   process.exit(0);
 }
-
-// Ensure the generated file parses before replacing the original.
-try {
-  // The actual server has runtime dependencies, so perform syntax-only validation.
-  new Function(source.replace(/^require\('dotenv'\)\.config\(\);\s*/, ''));
-} catch (error) {
-  // new Function cannot parse top-level return/await and is not a suitable full
-  // CommonJS parser. Use Node's syntax checker instead via a temporary file.
-  const tempPath = `${serverPath}.syntax-check-${process.pid}.js`;
-  try {
-    fs.writeFileSync(tempPath, source, { flag: 'wx', mode: 0o600 });
-    const { spawnSync } = require('node:child_process');
-    const check = spawnSync(process.execPath, ['--check', tempPath], { encoding: 'utf8' });
-    if (check.status !== 0) throw new Error(check.stderr || check.stdout || 'Syntax check failed.');
-  } finally {
-    try { fs.unlinkSync(tempPath); } catch {}
-  }
-}
-
-const backupPath = `${serverPath}.pre-admin-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
-fs.copyFileSync(serverPath, backupPath, fs.constants.COPYFILE_EXCL);
-const tempPath = `${serverPath}.tmp-${process.pid}`;
+const tempPath = `${serverPath}.check-${process.pid}.js`;
 try {
   fs.writeFileSync(tempPath, source, { flag: 'wx', mode: 0o600 });
-  fs.renameSync(tempPath, serverPath);
-  console.log(`Integrated admin routes and account-ban enforcement. Backup: ${path.basename(backupPath)}`);
-} catch (error) {
+  const check = spawnSync(process.execPath, ['--check', tempPath], { encoding: 'utf8' });
+  if (check.status !== 0) throw new Error(check.stderr || check.stdout || 'Syntax validation failed.');
+} finally {
   try { fs.unlinkSync(tempPath); } catch {}
+}
+const backup = `${serverPath}.pre-admin-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+fs.copyFileSync(serverPath, backup, fs.constants.COPYFILE_EXCL);
+const writePath = `${serverPath}.tmp-${process.pid}`;
+try {
+  fs.writeFileSync(writePath, source, { flag: 'wx', mode: 0o600 });
+  fs.renameSync(writePath, serverPath);
+  console.log(`Integrated admin panel, support desk and ban enforcement. Backup: ${path.basename(backup)}`);
+} catch (error) {
+  try { fs.unlinkSync(writePath); } catch {}
   throw error;
 }
